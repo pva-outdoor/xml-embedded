@@ -56,7 +56,7 @@ read_xml_init(struct read_xml_t *X, int io1, const char *name1)
   X->loc.col_no = 0;
   X->beg_col_no = 0;
   X->end_col_no = 0;
-  X->xmlns = str_to_symbol("xmlns", 146349010);
+  X->xmlns = xml_token_by_str("xmlns", 146349010);
 
   if (X->xmlns == 0)
     {
@@ -69,7 +69,7 @@ read_xml_init(struct read_xml_t *X, int io1, const char *name1)
   
   X->stack_size = 0;
   X->bound[0].name_index = 0;
-  X->bound[0].namesp = str_to_symbol("", 0);
+  X->bound[0].namesp_token = xml_token_by_str("", 0);
   X->bound_size = 1;
   X->bound_text[0] = 0;
   X->bound_text_size = 1;
@@ -139,8 +139,8 @@ _close_text(struct read_xml_t *X)
   if (X->text_size != (max_text_size - 1))
     {
       X->text[X->text_size++] = 0;
-      X->lex_symbol = str_to_symbol((X->text + X->lex_text_index),
-				    X->text_hash);      
+      X->lex_symbol =
+	xml_token_by_str((X->text + X->lex_text_index), X->text_hash);      
     }
   else
     {
@@ -258,15 +258,17 @@ _next_lex(struct read_xml_t *X)
       X->lex_loc = X->loc;
       /* _save_loc(X, &X->lex_loc); */
       
-      // <id>
-      for(; (isalnum(c) || c == '_' || c == '-' || c == '.'); c = _getc(X))
+      // <id_token>
+      for(; (' ' < c) &&
+	    (!ispunct(c) || c == '_' ||
+	     c == '-' || c == '.'); c = _getc(X))
 	_add_text(X, c);
       
       if (X->lex_text_index != X->text_size)
 	{
 	  _ungetc(X);
 	  _close_text(X);
-	  X->lex_tok = lex_id;
+	  X->lex_token = lex_id;
 	  return;
 	}
       // <literal>
@@ -288,18 +290,18 @@ _next_lex(struct read_xml_t *X)
 		}
 	    }
 	  _close_text(X);
-	  X->lex_tok = lex_literal;
+	  X->lex_token = lex_literal;
 	  return;
 	}      
       // etc
-      X->lex_tok = c;
+      X->lex_token = c;
       return;
     }
 }
 
 
 static void
-_do_unbind_to(struct read_xml_t *X, struct stack_t *state)
+_do_unbind_to(struct read_xml_t *X, struct stack_node_t *state)
 {
   X->bound_size = state->bound_size;
   X->bound_text_size = state->bound_text_size;
@@ -307,13 +309,14 @@ _do_unbind_to(struct read_xml_t *X, struct stack_t *state)
 
 
 static void
-_do_bind_namesp(struct read_xml_t *X, struct attr_t *attr1, unsigned namesp)
+_do_bind_namesp(struct read_xml_t *X,
+		struct attr_t *attr1, unsigned namesp_token)
 {
   // add bindings
   if (X->bound_size != max_bound_size)
     {
       struct binding_t *binding1 = X->bound + (X->bound_size++);
-      binding1->namesp = namesp;
+      binding1->namesp_token = namesp_token;
       binding1->name_index = X->bound_text_size;
       unsigned name_size = attr1->val_index - attr1->namesp_index;
       unsigned new_bound_text_size = X->bound_text_size + name_size;
@@ -353,11 +356,9 @@ _do_resolve_namespaces(struct read_xml_t *X)
 		  X->warned_about_unresolved = true;
 		  fprintf(parser_error(X), "%s\n",
 			  "tags/attributes with unresolved aliases are ignored");
-		  /* if (*alias == 0) */
-		  /*   fprintf(parser_messg(X->source, &a->loc, "note"), "%s\n", */
-		  /* 	    "You could bind alias \"\" to force it's resolution"); */
 		}	      
-	      fprintf(parser_messg(X->source, &a->loc, "warning"), "%s \"%s\" %s\n",
+	      fprintf(parser_messg(X->source, &a->loc, "warning"),
+		      "%s \"%s\" %s\n",
 		      "namespace alias", (alias), "is unknown");
 	      /* _do_bind_namesp(X, a, 0); */
 	      break;
@@ -365,7 +366,7 @@ _do_resolve_namespaces(struct read_xml_t *X)
 	  --last;
 	  if (0 == strcmp(alias, X->bound_text + last->name_index))
 	    {
-	      a->namesp = last->namesp;
+	      a->namesp_token = last->namesp_token;
 	      break;
 	    }
 	}
@@ -376,9 +377,9 @@ _do_resolve_namespaces(struct read_xml_t *X)
 static void
 _do_open_tag(struct read_xml_t *X)
 {
-  struct stack_t *top = X->stack + (X->stack_size++);
-  top->id = X->attrs[0].id;
-  top->namesp = X->attrs[0].namesp;
+  struct stack_node_t *top = X->stack + (X->stack_size++);
+  top->id_token = X->attrs[0].id_token;
+  top->namesp_token = X->attrs[0].namesp_token;
 }
 
 static void
@@ -387,24 +388,29 @@ _do_close_tag(struct read_xml_t *X)
   // restore bindings
   if (X->stack_size != 0)
     {
-      struct stack_t *top = X->stack + X->stack_size - 1;
+      struct stack_node_t *top = X->stack + X->stack_size - 1;
       _do_unbind_to(X, top);
 
       if (!X->warned_abount_unknown_tag_balance &&
-	  (top->id == 0 || top->namesp == 0))
+	  (top->id_token == 0 || top->namesp_token == 0))
 	{
 	  X->warned_abount_unknown_tag_balance = true;
 	  fprintf(parser_messg(X->source, &X->lex_loc, "warning(once)"), "%s\n",
-		  "tags with unknown ids or namespaces are not checked for open/close balance");
+		  "tags with unknown ids or namespaces "
+		  "are not checked for open/close balance");
 	}
 
-      if (top->id != X->attrs[0].id || top->namesp != X->attrs[0].namesp)
+      if (top->id_token != X->attrs[0].id_token ||
+	  top->namesp_token != X->attrs[0].namesp_token)
 	{
 	  fprintf(parser_error(X), "%s \"%s:%s\" %s\n",
-		  "closing tag", str_from_symbol(X->attrs[0].namesp), str_from_symbol(X->attrs[0].id),
+		  "closing tag", xml_token_name(X->attrs[0].namesp_token),
+		  xml_token_name(X->attrs[0].id_token),
 		  "mismatches opening tag");
-	  fprintf(parser_messg(X->source, &top->loc, "note"), "%s \"%s:%s\" %s\n",
-		  "the opening", str_from_symbol(top->namesp), str_from_symbol(top->id), "was here");
+	  fprintf(parser_messg(X->source, &top->loc, "note"),
+		  "%s \"%s:%s\" %s\n",
+		  "the opening", xml_token_name(top->namesp_token),
+		  xml_token_name(top->id_token), "was here");
 	}
 
       if (0 == --X->stack_size)
@@ -426,61 +432,62 @@ _read_tag(struct read_xml_t *X, enum tag_type_t tag_type)
   _next_lex(X);
 
   // read attributes
-  while (X->lex_tok == lex_id)
+  while (X->lex_token == lex_id)
     {
       struct attr_t *attr1 = X->attrs + X->attrs_size;
       attr1->loc = X->lex_loc;
       attr1->id_index = X->lex_text_index;
-      attr1->id = X->lex_symbol;      
-      attr1->val = attr1->namesp = 0;
+      attr1->id_token = X->lex_symbol;      
+      attr1->val_token = attr1->namesp_token = 0;
       attr1->val_index = attr1->namesp_index = X->text_size - 1;
       _next_lex(X);
-      if (X->lex_tok == ':')
+      if (X->lex_token == ':')
 	{	  
 	  _next_lex(X);	  
-	  if (X->lex_tok == lex_id)
+	  if (X->lex_token == lex_id)
 	    {
-	      if (X->xmlns == 0 || attr1->id != X->xmlns) /* alias:xx = ... */
+	      if (X->xmlns == 0 ||
+		  attr1->id_token != X->xmlns) /* alias:xx = ... */
 		{
-		  attr1->namesp = attr1->id;
-		  attr1->id = X->lex_symbol;
+		  attr1->namesp_token = attr1->id_token;
+		  attr1->id_token = X->lex_symbol;
 		  attr1->namesp_index = attr1->id_index;
 		  attr1->id_index = X->lex_text_index;
 		}
 	      else		/* xmlns:xx = ... or xmlns = ... */
 		{
-		  attr1->namesp = 0;
+		  attr1->namesp_token = 0;
 		  attr1->namesp_index = X->lex_text_index;
 		}
 	      _next_lex(X);
 	    }
 	  else
 	    fprintf(parser_error(X), "%s\n",
-		    "<attr-id> must be: <namesp>:<id>");
+		    "<attr-id_token> must be: <namesp_token>:<id_token>");
 	}
 
       if (X->attrs_size != 0)
 	{
-	  if (X->lex_tok == '=')
+	  if (X->lex_token == '=')
 	    {
 	      _next_lex(X);
-	      if (X->lex_tok == lex_literal)
+	      if (X->lex_token == lex_literal)
 		{
-		  attr1->val = X->lex_symbol;
+		  attr1->val_token = X->lex_symbol;
 		  attr1->val_index = X->lex_text_index;
 		  _next_lex(X);
 		}
 	      else
 		fprintf(parser_error(X), "%s\n"
-			"<attr-val> must be a literal string");		
+			"<attr-val_token> must be a literal string");		
 	    }
 	  else 
 	    fprintf(parser_error(X), "%s\n",
-		    "<attr> must be: <attr-id> = <attr-val>");
+		    "<attr> must be: <attr-id_token> = <attr-val_token>");
 
-	  if (X->xmlns != 0 && attr1->id == X->xmlns)
+	  if (X->xmlns != 0 && attr1->id_token == X->xmlns)
 	    {
-	      _do_bind_namesp(X, attr1, attr1->val);
+	      _do_bind_namesp(X, attr1, attr1->val_token);
 	      continue;
 	    }
 	}      
@@ -501,7 +508,7 @@ _read_tag(struct read_xml_t *X, enum tag_type_t tag_type)
   // finish tag
   if (X->attrs_size != 0)
     {
-      if (X->lex_tok == '/')
+      if (X->lex_token == '/')
 	{
 	  if (tag_type == tag_type_open)
 	    {
@@ -520,7 +527,7 @@ _read_tag(struct read_xml_t *X, enum tag_type_t tag_type)
 		  "here was \"</\"");
 	  return tag_type_closed;
 	}
-      else if (X->lex_tok == '>')
+      else if (X->lex_token == '>')
 	{
 	  if (tag_type == tag_type_open)
 	    {
@@ -545,29 +552,49 @@ _read_tag(struct read_xml_t *X, enum tag_type_t tag_type)
 }
 
 
+static void
+_read_text(struct read_xml_t *X)
+{
+  int c;
+  while('<' != (c = _getc(X)))
+    {
+      if (' ' < c)
+	{
+	  if (X->text_size)
+	    _add_text(X, ' ');
+
+	  do
+	    {
+	      if (c != '&')
+		_add_text(X, c);
+	      else
+		_read_esc(X);
+
+	      c = _getc(X);
+	      if ('<' == c)
+		return;
+	    }
+	  while (' ' < c);
+	}
+
+      if (c == '\n')
+	_got_newline(X);
+      
+      if (c == -1)
+	break;	  	  
+    }
+}
+
+
 enum tag_type_t
 read_xml_bump(struct read_xml_t *X)
 {  
-  X->text_size = X->lex_text_index = 0;
-  X->attrs_size = 0;
-
   for(;;)
     {
-      int c;
-      // filter out text
-      while ('<' != (c = _getc(X)))
-	{
-	  if (c == -1)
-	    return tag_type_closing;
-	  
-	  if (c == '&')
-	    _read_esc(X);
-	  else
-	    _add_text(X, c);
-	  
-	  if (c == '\n')
-	    _got_newline(X);
-	}
+      X->text_size = X->lex_text_index = 0;
+      X->attrs_size = 0;
+
+      _read_text(X);
 
       if (X->text_size)
 	{
@@ -575,6 +602,9 @@ read_xml_bump(struct read_xml_t *X)
 	  _close_text(X);
 	  return tag_type_text;
 	}
+
+      if (X->eof)
+	break;
 
       if (X->stack_size == max_stack_size)
 	{
@@ -585,13 +615,13 @@ read_xml_bump(struct read_xml_t *X)
 	}
       
       // tags
-      struct stack_t *top = X->stack + X->stack_size;
+      struct stack_node_t *top = X->stack + X->stack_size;
       top->loc = X->loc;
       /* _save_loc(X, &top->loc); */
       top->bound_size = X->bound_size;
       top->bound_text_size = X->bound_text_size;
       
-      c = _getc(X);
+      int c = _getc(X);
       if (c == '/')
 	{
 	  _read_tag(X, tag_type_closing);
@@ -618,7 +648,8 @@ read_xml_bump(struct read_xml_t *X)
 		      break;
 		    }
 		}
-	      while (c == '>' && n <= 2);
+	      while (c != '>' || n < 2);
+	      continue;
 	    }
 	}
       else if (c == '[' || c == '?')	
@@ -626,7 +657,7 @@ read_xml_bump(struct read_xml_t *X)
 	  X->want_warn_end_of_tag = false;
 	}
       else
-	{
+	{	  
 	  _ungetc(X);
 	  return _read_tag(X, tag_type_open);
 	}

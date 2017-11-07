@@ -4,13 +4,13 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-typedef short unsigned symbol_t;
+typedef short unsigned xml_token_t;
 
-extern symbol_t
-str_to_symbol(const char *str, unsigned str_hash);
+extern xml_token_t
+xml_token_by_str(const char *str, unsigned str_hash);
 
 extern const char*
-str_from_symbol(symbol_t symbol);
+xml_token_name(xml_token_t symbol);
 
 enum
   {
@@ -49,24 +49,24 @@ struct attr_t
   short unsigned namesp_index;
   short unsigned id_index;
   short unsigned val_index;
-  symbol_t namesp;
-  symbol_t id;
-  symbol_t val;
+  xml_token_t namesp_token;
+  xml_token_t id_token;
+  xml_token_t val_token;
 };
 
 
 struct binding_t
 {
   short unsigned name_index;
-  symbol_t namesp;
+  xml_token_t namesp_token;
 };
 
 
-struct stack_t
+struct stack_node_t
 {
   struct location_t loc;
-  symbol_t id;
-  symbol_t namesp;
+  xml_token_t id_token;
+  xml_token_t namesp_token;
   short unsigned bound_size;
   short unsigned bound_text_size;
 };
@@ -80,7 +80,7 @@ struct read_xml_t
   struct location_t ending_loc;
  
   struct attr_t attrs[1 + max_attrs_size];
-  struct stack_t stack[max_stack_size];
+  struct stack_node_t stack[max_stack_size];
   struct binding_t bound[max_bound_size];
 
   unsigned char *line_start;
@@ -93,8 +93,8 @@ struct read_xml_t
   unsigned end_col_no;
   
 
-  short int lex_tok;
-  symbol_t lex_symbol;
+  short int lex_token;
+  xml_token_t lex_symbol;
   short unsigned lex_text_index;
   
   short unsigned attrs_size;
@@ -103,7 +103,7 @@ struct read_xml_t
   short unsigned text_size;
   short unsigned bound_text_size;
   
-  symbol_t xmlns;
+  xml_token_t xmlns;
 
   char text[max_text_size];
   char bound_text[max_bound_text_size];
