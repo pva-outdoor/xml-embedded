@@ -1,0 +1,37 @@
+xml-embedded
+************
+
+This is a minimalistic 24/7 xml parser sample with rich diagnostics.
+The main architecture goals:
+
+1) small footprint
+
+2) fast operation
+
+3) minimum reallocations
+
+4) maximum range checks
+
+The testing application reads XML file paths from stdin and collects
+information from them. Using the obtained information it makes some
+kind of data scheme covered with given XML files.
+
+To build a testing application do the following:
+
+1) clone, make build directory
+
+$ git clone path/to/repo/xml-embedded.git
+$ mkdir xml-embedded/obj
+
+2) generate configure script (you must have autoconf installed)
+
+$ cd xml-embedded
+$ autoreconf -i -f
+
+3) generate build configuration anm make
+
+$ cd obj
+$ ../configure
+$ make
+
+
