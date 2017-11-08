@@ -226,7 +226,7 @@ _read_esc(struct read_xml_t *X)
 	}
 
       if (0 == strcmp(esc, (esc1 + 1)))
-	c = esc[0];
+	c = esc1[0];
       else
 	{
 	  ++X->errors;
