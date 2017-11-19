@@ -9,87 +9,89 @@ extern "C" {
 
 #include <map>
 #include <vector>
+#include <algorithm>
 using namespace std;
 
 
 enum
   {
-    symbol_hashtab_size = 5051
+    token_hashtab_size = 5051
   };
 
 
-struct pair_t
+struct token_info_t
 {
   const char *str;
   unsigned next;
-  bool is_tag;
+  bool is_used;
 };
 
-unsigned
-symbol_hashtab[symbol_hashtab_size];
 
-struct pair_t *
-symbols;
 
-unsigned
-symbols_size;
 
-unsigned
-symbols_cap;
+xml_token_t
+token_hashtab[token_hashtab_size];
 
-xml_token_t xml_token_by_str(const char *str, unsigned str_hash)
+vector<token_info_t> tokens;
+
+int global_is_verbose = true;
+
+int extra_messages_allowed()
 {
-  unsigned *loc = symbol_hashtab + (str_hash % symbol_hashtab_size);
-  unsigned s;
-  for(s = *loc; s != 0; s = symbols[s-1].next)
-    {
-      if (0 == strcmp(str, symbols[s-1].str))
-	return s;
-    }
-
-  if (symbols_cap == symbols_size)
-    {
-      unsigned new_cap = symbols_cap ? 2*symbols_cap : 256;
-      void *mem = realloc(symbols, sizeof(*symbols)*new_cap);
-      if (mem)
-	{
-	  symbols_cap = new_cap;
-	  symbols = (pair_t*)mem;
-	}
-      else
-	return 0;
-    }
-
-  symbols[symbols_size].str = strdup(str);
-  symbols[symbols_size].next = *loc;
-  return *loc = ++symbols_size;
+  return true;
 }
 
-
-xml_token_t xml_token_by_str_(const char *str)
+xml_token_t
+xml_token_by_name(const char *str, unsigned opt_hash)
 {
-  unsigned hash = 0;
-  for(const unsigned char *s = (const unsigned char *)str; *s; ++s)
-    hash = 33*hash + (*s);
+  if (tokens.empty())
+    fill((token_hashtab + 0), (token_hashtab + token_hashtab_size), not_a_token);
 
-  return xml_token_by_str(str, hash);
+  if (opt_hash == 0)
+    {
+      for(const unsigned char *s = (const unsigned char *)str; *s; ++s)
+	opt_hash = 33*opt_hash + (*s);
+    }
+  
+  xml_token_t *loc = token_hashtab + (opt_hash % token_hashtab_size);
+  xml_token_t t;
+  
+  for(t = *loc; t != not_a_token; t = tokens[t].next)
+    {
+      if (0 == strcmp(str, tokens[t].str))
+	return t;
+    }
+
+  token_info_t token1;
+  token1.str = strdup(str);
+  token1.next = *loc;
+  *loc = tokens.size();
+  token1.is_used = false;
+  tokens.push_back(token1);
+  return *loc;
 }
 
 
 const char *
-xml_token_name(xml_token_t s)
+xml_token_name(xml_token_t t)
 {
-  return (unsigned)(s - 1) < symbols_size ? symbols[s - 1].str : "";
+  if (t < tokens.size())
+    {
+      token_info_t &info = tokens[t];
+      info.is_used = true;
+      return info.str;
+    }
+  return  "<unknown>";
 }
 
 
 
-xml_token_t t_STRING = xml_token_by_str_("<string>");
-xml_token_t t_NUMBER = xml_token_by_str_("<number>");
-xml_token_t t_ID = xml_token_by_str_("ID");
-xml_token_t t_string = xml_token_by_str_("string");
-xml_token_t t_type = xml_token_by_str_("type");
-xml_token_t t_anyType = xml_token_by_str_("anyType");
+xml_token_t t_STRING = xml_token_by_name("<string>", 0);
+xml_token_t t_NUMBER = xml_token_by_name("<number>", 0);
+xml_token_t t_ID = xml_token_by_name("ID", 0);
+xml_token_t t_string = xml_token_by_name("string", 0);
+xml_token_t t_type = xml_token_by_name("type", 0);
+xml_token_t t_anyType = xml_token_by_name("anyType", 0);
 
 
 
@@ -127,13 +129,12 @@ struct kind_t
   type_kind_t type;
 };
 
-typedef map<xml_token_t, unsigned> node_info_t;
 typedef vector<xml_token_t> member_set_t;
 typedef map<member_set_t, kind_t> kinds_t;
 
 struct mined_info1_t
 {
-  node_info_t members;
+  member_set_t members;
   xml_token_t type;
   pair<kinds_t::iterator, bool> kind;
   bool is_item;
@@ -146,11 +147,20 @@ typedef map<xml_token_t, mined_info1_t> mined_info_t;
 mined_info_t mined_info;
 
 void
+add_member(mined_info1_t &info, xml_token_t member)
+{
+  if (find(info.members.begin(),
+	   info.members.end(), member) ==
+      info.members.end())
+    info.members.push_back(member);
+}
+
+void
 add_mined_item(xml_token_t tag_token,
 		    xml_token_t val_token, const char *text)
 {
   mined_info1_t &info = mined_info[tag_token];
-  ++info.members[val_token];
+  add_member(info, val_token);
   
   if (is_number(text))
     {
@@ -163,7 +173,6 @@ add_mined_item(xml_token_t tag_token,
       info.is_string = true;
     }
   
-  ++info.members[val_token];
   info.is_item = true;  
 }
 
@@ -190,16 +199,16 @@ main(int argc, char *argv[])
       if (io != -1)
 	{
 	  struct read_xml_t X[1];
-	  read_xml_init(X, io, fname);
+	  init_read_xml(X, io, fname);
 
 	  while (!X->eof)
 	    {
-	      tag_type_t tag_type = read_xml_bump(X);
-	      if (tag_type <= tag_type_closed)
+	      xml_node_type_t tag_type = bump_xml_node(X);
+	      if (tag_type == xml_node_open)
 		{
 		  if (X->attrs_size)
 		    {
-		      attr_t *a, *ea;
+		      xml_attr_t *a, *ea;
 		      unsigned tag = X->attrs[0].id_token;
 		      // use "type = ..." it instead of tag name
 		      for(a = X->attrs + 1,
@@ -220,25 +229,25 @@ main(int argc, char *argv[])
 					   X->text + a->val_index);
 			}
 		      // add subtag
-		      if (tag_type == tag_type_open)
+		      if (tag_type == xml_node_open)
 			{
 			  if (!my_stack.empty())
-			    ++mined_info[my_stack.back()].members[tag];
+			    add_member(mined_info[my_stack.back()], tag);
 			  my_stack.push_back(tag);
 			}		    
 		    }
 		}
-	      else if (tag_type == tag_type_text)
+	      else if (tag_type == xml_node_text)
 		{
 		  // add tag text
 		  if (X->stack_size)
 		    {
 		      add_mined_item(X->stack[X->stack_size - 1].id_token,
-				     xml_token_by_str(X->text, X->text_hash),
+				     xml_token_by_name(X->text, X->text_hash),
 				     X->text);
 		    }
 		}
-	      else if (tag_type == tag_type_closing)
+	      else if (tag_type == xml_node_close)
 		{
 		  if (!my_stack.empty())
 		    my_stack.pop_back();
@@ -270,26 +279,6 @@ main(int argc, char *argv[])
 	}
     }
 
-  // collect hashtab statistics
-  unsigned hash_fill = 0;
-  unsigned hash_worst = 0;
-  for(unsigned n=0; n<symbol_hashtab_size; ++n)
-    {
-      unsigned s = symbol_hashtab[n];
-      if (s)
-	{
-	  ++hash_fill;
-	  unsigned this_case;
-	  for (this_case = 0; s; s = symbols[s - 1].next)
-	    {
-	      ++this_case;
-	    }
-
-	  if (hash_worst < this_case)
-	    hash_worst = this_case;
-	}
-    }
-
   pair<member_set_t, kind_t> kind1;
   map<member_set_t, kind_t> kinds;
 
@@ -298,13 +287,8 @@ main(int argc, char *argv[])
 	a1 = mined_info.begin(), a2 = mined_info.end();
       a1 != a2; ++a1)
     {
-      kind1.first.clear();
+      kind1.first = a1->second.members;
       kind1.second.same_as = a1->first;
-      
-      for(node_info_t::iterator
-	    b1 = a1->second.members.begin(), b2 = a1->second.members.end();
-	  b1 != b2; ++b1)
-	kind1.first.push_back(b1->first);
 
       if (a1->second.is_string)
 	kind1.second.type = kind_string;
@@ -314,6 +298,9 @@ main(int argc, char *argv[])
 	kind1.second.type = kind_enum;
       else 
 	kind1.second.type = kind_struct;
+      
+      sort(kind1.first.begin(),
+	   kind1.first.end());
       
       a1->second.kind = kinds.insert(kind1);
     }
@@ -328,17 +315,20 @@ main(int argc, char *argv[])
 	{
 	  if (kind == kind_struct)
 	    {
-	      printf("items_%s = \n", xml_token_name(a1->first));
-	      printf("  {\n");
-
-	      for(node_info_t::iterator
+	      printf("static int\n");
+	      printf("struct_%s(struct converter_t *X, "
+		     "xml_token_t tag_token,\n", xml_token_name(a1->first));
+	      printf("     xml_token_t val_token, const char *text)\n");
+	      printf("{\n");
+	      printf("  switch(tag_token)\n");
+	      printf("    {\n");
+	      for(member_set_t::iterator
 		    b1 = a1->second.members.begin(),
 		    b2 = a1->second.members.end();
 		  b1 != b2; ++b1)
 		{
-		  mined_info_t::iterator node = mined_info.find(b1->first);
-		  const char *name = xml_token_name(b1->first);
-		  printf("    {\"%s\" tag_%s, ", name, name);
+		  mined_info_t::iterator node = mined_info.find(*b1);
+		  const char *name = xml_token_name(*b1);
 		  if (node != mined_info.end())
 		    {
 		      const char *ref_type =
@@ -346,47 +336,98 @@ main(int argc, char *argv[])
 		      switch(node->second.kind.first->second.type)
 			{
 			case kind_number:
-			  printf("type_NUMBER"); break;
+			  printf("    case t_%s:\n"
+				 "      put_u16(X, 0x0001, strtol(text));\n"
+				 "      break;\n"
+				 "\n", name);
+			  break;
 			case kind_string:
-			  printf("type_STRING"); break;
+			  printf("    case t_%s:\n"
+				 "      put_str(X, 0x0001, text);\n"
+				 "      break;\n"
+				 "\n", name);
+			  break;
 			case kind_enum:
-			  printf("/*enum*/type_%s", ref_type); break;
+			  printf("    case t_%s:\n"
+				 "      put_u8(X, 0x0001, enum_%s(val_token));\n"
+				 "      break;\n"
+				 "\n", name, ref_type);
+			  break;
 			default:
-			  printf("/*struct*/type_%s", ref_type); break;
+			  printf("    case t_%s:\n"
+				 "      convert(X, 0x8000, struct_%s);\n"
+				 "      break;\n"
+				 "\n", name, ref_type);
+			  break;
 			}
 		    }
 		  else
-		    printf("type_unknown");
-	      
-		  printf("},\n");
+		    printf("    /* unknown type \"%s\" */\n", name);
 		}
-	      printf("  };\n\n");
+	      
+	      printf("    default: return -1;\n");
+	      printf("    }\n");
+	      printf("   return 0;\n");
+	      printf("}\n");
+	      printf("\n");
+	      printf("\n");
 	    }
 	  else if (kind == kind_enum)
 	    {
-	      printf("items_%s = \n", xml_token_name(a1->first));
-	      printf("  {\n");
+	      printf("static unsigned char\n");
+	      printf("enum_%s(xml_token_t val_token)\n", xml_token_name(a1->first));
+	      printf("{\n");
+	      printf("  switch(val_token)\n");
+	      printf("    {\n");
 
-	      for(node_info_t::iterator
+	      unsigned num = 0;
+	      for(member_set_t::iterator
 		    b1 = a1->second.members.begin(),
 		    b2 = a1->second.members.end();
 		  b1 != b2; ++b1)
 		{
-		  const char *name = xml_token_name(b1->first);
-		  printf("    val_%s,\n", name);
+		  const char *name = xml_token_name(*b1);
+		  printf("    case t_%s: return %u;\n", name, num++);		 
 		}
 	      
-	      printf("  };\n\n");
+	      printf("    default: return 255;\n");
+	      printf("    }\n");
+	      printf("}\n");
+	      printf("\n");
+	      printf("\n");
 	    }
 	}
     }
   
 
+  printf("Used tokens:\n");
+  // collect hashtab statistics
+  unsigned hash_fill = 0;
+  unsigned hash_worst = 0;
+  for(unsigned n=0; n<token_hashtab_size; ++n)
+    {
+      unsigned s = token_hashtab[n];
+      if (s)
+	{
+	  ++hash_fill;
+	  unsigned this_case;
+	  for (this_case = 0; s; s = tokens[s - 1].next)
+	    {
+	      if (tokens[s - 1].is_used)
+		printf("  %s\n", tokens[s - 1].str);
+	      ++this_case;
+	    }
+
+	  if (hash_worst < this_case)
+	    hash_worst = this_case;
+	}
+    }
+  
   fprintf(stderr, "\n");
   fprintf(stderr, "processed %u files\n", (nfiles));
   fprintf(stderr, "finished with %u errors\n", (errors));
   fprintf(stderr, "sizeof(read_xml_t) = %u\n", sizeof(read_xml_t));
-  fprintf(stderr, "symbols_size = %u\n", symbols_size);
+  fprintf(stderr, "symbols_size = %u\n", tokens.size());
   fprintf(stderr, "used_bindings = %u\n", used_bindings);
   fprintf(stderr, "used_binding_text = %u\n", used_binding_text);
   fprintf(stderr, "used_text = %u\n", used_text);
@@ -395,11 +436,11 @@ main(int argc, char *argv[])
 
   if (hash_fill)
     {
-      fprintf(stderr, "hash_size = %u\n", symbol_hashtab_size);
+      fprintf(stderr, "hash_size = %u\n", token_hashtab_size);
       fprintf(stderr, "hash_fill = %u%%\n",
-	      100*hash_fill/symbol_hashtab_size);
+	      100*hash_fill/token_hashtab_size);
       fprintf(stderr, "hash_avg_case = %u\n",
-	      (symbols_size + hash_fill/2)/hash_fill);
+	      (tokens.size() + hash_fill/2)/hash_fill);
       fprintf(stderr, "hash_worst_case = %u\n", hash_worst);
     }
         
